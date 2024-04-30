@@ -1,0 +1,290 @@
+################################################
+###     Namespace
+################################################
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: projeto
+spec: {}
+status: {}
+################################################
+###     Redis DNS: redis-svc
+################################################
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    app: redis
+  name: redis
+  namespace: projeto
+spec:
+  serviceName: default
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - image: redis
+          name: redis
+          ports:
+            - containerPort: 6379
+          livenessProbe:
+            exec:
+              command:
+                - "redis-cli"
+                - "ping"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - "redis-cli"
+                - "ping"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 1
+            successThreshold: 0
+          volumeMounts:
+            - name: redis-data
+              mountPath: /data
+      volumes:
+        - name: redis-data
+          persistentVolumeClaim:
+            claimName: redis-pvc
+status: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: projeto
+spec:
+  ports:
+    - port: 6379
+      protocol: TCP
+      targetPort: 6379
+  selector:
+    app: redis
+type: ClusterIP
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-pvc
+  namespace: projeto
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 500Mi
+################################################
+###     RabbitMq DNS: rabbitmq-svc
+################################################
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: rabbitmq
+  name: rabbitmq
+  namespace: projeto
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rabbitmq
+  strategy: {}
+  template:
+    metadata:
+      labels:
+        app: rabbitmq
+    spec:
+      containers:
+      - image: rabbitmq:3-management
+        name: rabbitmq
+        ports:
+        - containerPort: 5672
+status: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+  namespace: projeto
+spec:
+  ports:
+    - port: 5672
+      protocol: TCP
+      targetPort: 5672
+  selector:
+    app: rabbitmq
+type: ClusterIP
+################################################
+###     Minio DNS: minio-svc
+################################################
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    app: minio
+  name: minio
+  namespace: projeto
+spec:
+  serviceName: default
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      containers:
+      - image: quay.io/minio/minio
+        args:
+        - server
+        - /data
+        - --console-address
+        - ":9001"
+        name: minio
+        ports:
+        - containerPort: 9000
+          name: api
+        - containerPort: 9001
+          name: cli
+        env:
+        - name: MINIO_ROOT_USER
+          value: "ricardo"
+        - name: MINIO_ROOT_PASSWORD
+          value: "test1234"
+        volumeMounts:
+          - name: minio-data
+            mountPath: /data
+      volumes:
+        - name: minio-data
+          persistentVolumeClaim:
+            claimName: minio-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: projeto
+spec:
+  ports:
+    - name: minioapi
+      port: 9000
+      targetPort: 9000
+      protocol: TCP
+    - name: miniocli
+      port: 9001
+      targetPort: 9001
+      protocol: TCP
+  selector:
+    app: minio
+type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-minio
+  namespace: projeto
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: projetominio.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: minio
+                port:
+                  number: 9000
+    - host: projetominiocli.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: minio
+                port:
+                  number: 9001
+
+#172.18.0.2 projetominio.com / kubectl get ingress -owide / ingress-minio traefik projetominio.com 172.18.0.2 80 23m
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio-pvc
+  namespace: projeto
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 500Mi
+################################################
+###     Consumers
+################################################
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: consumer
+  name: consumer
+  namespace: projeto
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: consumer
+  template:
+    metadata:
+      labels:
+        app: consumer
+    spec:
+      containers:
+        - image: ricardorossi777/consumer:latest
+          name: container-consumer
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 5000
+################################################
+###     Producer
+################################################
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  labels:
+    app: producer
+  name: producer
+  namespace: projeto
+spec:
+  template:
+    spec:
+      containers:
+      - name: producer
+        image: ricardorossi777/producer:latest
+        command: ["python3",  "Producer.py"]
+#        imagePullPolicy: Always
+      restartPolicy: OnFailure
+#  backoffLimit: 6
+
+
